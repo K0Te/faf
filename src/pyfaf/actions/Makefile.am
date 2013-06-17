@@ -6,6 +6,7 @@ actions_PYTHON = \
     repoadd.py \
     repolist.py \
     reposync.py \
+    retrace.py \
     save_reports.py \
     shell.py
 

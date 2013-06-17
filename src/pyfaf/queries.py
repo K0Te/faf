@@ -27,7 +27,9 @@ from pyfaf.storage import (Arch,
                            Report,
                            ReportArch,
                            ReportBacktrace,
+                           ReportBtFrame,
                            ReportBtHash,
+                           ReportBtThread,
                            ReportExecutable,
                            ReportHash,
                            ReportOpSysRelease,
@@ -199,6 +201,23 @@ def get_ssource_by_bpo(db, build_id, path, offset):
                       .filter(SymbolSource.path == path)
                       .filter(SymbolSource.offset == offset)
                       .first())
+
+def get_ssources_for_retrace(db, problemtype):
+    """
+    Return pyfaf.storage.SymbolSource objects that need retracing.
+    This includes NULL symbol or NULL source file/line.
+    """
+
+    return (db.session.query(SymbolSource)
+                      .join(Symbol)
+                      .join(ReportBtFrame)
+                      .join(ReportBtThread)
+                      .join(ReportBacktrace)
+                      .join(Report)
+                      .filter(Report.type == problemtype)
+                      .filter((SymbolSource.symbol_id == None) |
+                              (SymbolSource.source_path == None) |
+                              (SymbolSource.line_number == None)))
 
 def get_symbol_by_name_path(db, name, path):
     """

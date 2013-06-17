@@ -30,6 +30,8 @@ from ..queries import (get_backtrace_by_hash,
                        get_ssource_by_bpo,
                        get_symbol_by_name_path)
 from ..storage import (OpSysComponent,
+                       Package,
+                       PackageDependency,
                        ReportBacktrace,
                        ReportBtFrame,
                        ReportBtHash,
@@ -131,6 +133,10 @@ class CoredumpProblem(ProblemType):
             result.append(sha1("\n".join(hashbase)).hexdigest())
 
         return result
+
+    def _filename_from_build_id(self, build_id):
+        return "/usr/lib/debug/.build-id/{0}/{1}.debug".format(build_id[:2],
+                                                               build_id[2:])
 
     def validate_ureport(self, ureport):
         CoredumpProblem.checker.check(ureport)
@@ -269,8 +275,100 @@ class CoredumpProblem(ProblemType):
     def get_component_name(self, ureport):
         return ureport["component"]
 
-    def retrace_symbols(self):
-        self.log_info("Retracing is not yet implemented for coredumps")
+    def get_dbginfos_for_ssource(self, db, db_symbolsource):
+        filename = self._filename_from_build_id(db_symbolsource.build_id)
+        return (db.session.query(Package)
+                          .join(PackageDependency)
+                          .filter(PackageDependency.type == "PROVIDES")
+                          .filter(PackageDependency.name == filename)
+                          .all())
+
+    def get_pkg_for_file(db, db_ssource, db_build):
+        return (db.session.query(Package)
+                          .join(PackageDependency)
+                          .filter(Package.build == db_build)
+                          .filter(PackageDependency.type == "PROVIDES")
+                          .filter(PackageDependency.name == db_ssource.path)
+                          .first())
+
+    def retrace(self, db, db_ssources, debug_path, pkg_path, flush=False):
+        new_symbols = {}
+        new_symbolsources = {}
+
+        for db_ssource in db_ssources:
+            norm_path = get_libname(db_ssource.path)
+            binary = os.path.join(package_path, db_ssource.path[1:])
+            address = get_base_address(binary) + db_ssource.offset
+            results = addr2line(binary, address, debuginfo_path).reverse()
+            while len(results) > 1:
+                func_name, source_file, source_line = results.pop()
+                # hack - we have no offset for inlined symbols
+                # let's use minus source line to avoid collisions
+                offset = -source_line
+
+                db_ssouce_inl = get_ssource_by_bpo(db, db_ssource.build_id,
+                                                   db_ssource.path, offset)
+                if db_ssource_inl is None:
+                    key = (db_ssource.build_id, db_ssource.path, offset)
+                    if key in new_symbolsources:
+                        db_ssource_inl = new_symbolsources[key]
+                    else:
+                        db_symbol_inl = get_symbol_by_name_path(db, func_name,
+                                                                norm_path)
+                        if db_symbol_inl is None:
+                            key = (func_name, norm_path)
+                            if key in new_symbols:
+                                db_symbol_inl = new_symbols[key]
+                            else:
+                                db_symbol_inl = Symbol()
+                                db_symbol_inl.name = func_name
+                                db_symbol_inl.normalized_path = norm_path
+                                db.session.add(db_symbol_inl)
+                                new_symbols[key] = db_symbol_inl
+
+                        db_ssource_inl = SymbolSource()
+                        db_ssource_inl.symbol = db_symbol_inl
+                        db_ssource_inl.build_id = db_ssource.build_id
+                        db_ssource_inl.path = db_ssource.path
+                        db_ssource_inl.offset = offset
+                        db_ssource_inl.source_path = source_file
+                        db_ssource_inl.line_number = source_line
+                        db.session.add(db_ssource_inl)
+
+                    for db_frame in db_ssource.frames:
+                        order = db_frame.order
+
+                        shift = filter(lambda f: f.order >= order,
+                                       db_frame.thread.frames)
+                        for db_frame_shift in shift:
+                            db_frame_shift.order += 1
+
+                        db_frame = ReportBtFrame()
+                        db_frame.symbolsource = db_ssource_inl
+                        db_frame.thread = db_frame.thread
+                        db_frame.inlined = True
+                        db_frame.order = order
+                        db.session.add(db_frame)
+
+            func_name, source_file, source_line = results.pop()
+            db_symbol = get_symbol_by_name_path(db, func_name, norm_path)
+            if db_symbol is None:
+                key = (func_name, norm_path)
+                if key in new_symbols:
+                    db_symbol = new_symbols[key]
+                else:
+                    db_symbol = Symbol()
+                    db_symbol.name = func_name
+                    db_symbol.normalized_path = norm_path
+                    db.session.add(db_symbol)
+                    new_symbols[key] = db_symbol
+
+            db_ssource.symbol = db_symbol
+            db_ssource.source_path = source_file
+            db_ssource.line_number = source_line
+
+        if flush:
+            db.session.flush()
 
 #    def compare(self, problem1, problem2):
 #        pass

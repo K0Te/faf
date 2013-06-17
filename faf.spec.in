@@ -112,6 +112,13 @@ Requires: %{name} = %{version}
 %description action-arch
 A plugin for %{name} implementing archadd action
 
+%package action-retrace
+Summary: %{name}'s retrace plugin
+Requires: %{name} = %{version}
+
+%description action-retrace
+A plugin for %{name} implementing retrace action
+
 %prep
 %setup -q
 ./autogen.sh
@@ -281,6 +288,9 @@ exit 0
 
 %files action-arch
 %{python_sitelib}/pyfaf/actions/archadd.py*
+
+%files action-retrace
+%{python_sitelib}/pyfaf/actions/retrace.py*
 
 %changelog
 * Mon Apr 15 2013 Michal Toman <mtoman@redhat.com> 0.9-1
